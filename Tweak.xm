@@ -1,11 +1,24 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
+#import <mach-o/dyld.h>
 
+// ==========================================
+// VARIÁVEIS DO CHEAT
+// ==========================================
 static bool g_Aimbot = false;
 static bool g_ESP = false;
 static bool g_FOV = false;
-static float g_FOVRadius = 120.0f;
+static float g_FOVRadius = 150.0f;
 
+// ==========================================
+// ESTRUTURAS DO UNITY (Vector3, Quaternion)
+// ==========================================
+struct Vector3 { float x, y, z; };
+struct Quaternion { float x, y, z, w; };
+
+// ==========================================
+// FOV E ESP (IGUAL AO ANTERIOR)
+// ==========================================
 @interface FOVOverlay : UIView
 @end
 @implementation FOVOverlay
@@ -13,7 +26,7 @@ static float g_FOVRadius = 120.0f;
     if (!g_FOV) return;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(ctx, [UIColor greenColor].CGColor);
-    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineWidth(ctx, 2.0);
     CGRect circle = CGRectMake(rect.size.width/2 - g_FOVRadius, rect.size.height/2 - g_FOVRadius, g_FOVRadius*2, g_FOVRadius*2);
     CGContextStrokeEllipseInRect(ctx, circle);
 }
@@ -27,18 +40,19 @@ static float g_FOVRadius = 120.0f;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(ctx, [UIColor redColor].CGColor);
     CGContextSetLineWidth(ctx, 2.0);
-    // Caixa de teste no meio da tela
-    CGContextStrokeRect(ctx, CGRectMake(rect.size.width/2 - 40, rect.size.height/2 - 100, 80, 200));
+    CGContextStrokeRect(ctx, CGRectMake(rect.size.width/2 - 30, rect.size.height/2 - 80, 60, 160));
 }
 @end
 
+// ==========================================
+// PAINEL DO HYZZ
+// ==========================================
 @interface HyzzPanel : UIWindow
 @property (nonatomic, strong) UIView *mainView;
 @property (nonatomic, strong) UIButton *openMenuBtn;
 @end
 
 @implementation HyzzPanel
-
 - (instancetype)init {
     self = [super initWithFrame:[UIScreen mainScreen].bounds];
     if (!self) return nil;
@@ -48,13 +62,10 @@ static float g_FOVRadius = 120.0f;
     self.hidden = NO;
 
     FOVOverlay *fov = [[FOVOverlay alloc] initWithFrame:self.bounds];
-    fov.userInteractionEnabled = NO;
-    fov.backgroundColor = [UIColor clearColor];
+    fov.userInteractionEnabled = NO; fov.backgroundColor = [UIColor clearColor];
     [self.rootViewController.view addSubview:fov];
-
     ESPOverlay *esp = [[ESPOverlay alloc] initWithFrame:self.bounds];
-    esp.userInteractionEnabled = NO;
-    esp.backgroundColor = [UIColor clearColor];
+    esp.userInteractionEnabled = NO; esp.backgroundColor = [UIColor clearColor];
     [self.rootViewController.view addSubview:esp];
 
     self.openMenuBtn = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -62,7 +73,6 @@ static float g_FOVRadius = 120.0f;
     self.openMenuBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0.0 blue:0.5 alpha:1.0];
     self.openMenuBtn.layer.cornerRadius = 30;
     [self.openMenuBtn setTitle:@"HYZ" forState:UIControlStateNormal];
-    self.openMenuBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [self.openMenuBtn addTarget:self action:@selector(showMenu) forControlEvents:UIControlEventTouchUpInside];
     [self.rootViewController.view addSubview:self.openMenuBtn];
 
@@ -74,8 +84,7 @@ static float g_FOVRadius = 120.0f;
     self.mainView.layer.cornerRadius = 15;
     self.mainView.layer.borderWidth = 2.0;
     self.mainView.layer.borderColor = [UIColor purpleColor].CGColor;
-    self.mainView.hidden = YES;
-    self.mainView.alpha = 0.0;
+    self.mainView.hidden = YES; self.mainView.alpha = 0.0;
     [self.rootViewController.view addSubview:self.mainView];
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, 260, 30)];
@@ -96,32 +105,26 @@ static float g_FOVRadius = 120.0f;
 
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragMenu:)];
     [self.mainView addGestureRecognizer:pan];
-    
     return self;
 }
-
 - (void)addToggle:(NSString *)title y:(CGFloat)y tag:(int)tag {
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     btn.frame = CGRectMake(20, y, 260, 45);
     btn.backgroundColor = [UIColor darkGrayColor];
-    btn.layer.cornerRadius = 8;
-    btn.tag = tag;
+    btn.layer.cornerRadius = 8; btn.tag = tag;
     [btn setTitle:[NSString stringWithFormat:@"%@ [OFF]", title] forState:UIControlStateNormal];
     [btn addTarget:self action:@selector(toggleAction:) forControlEvents:UIControlEventTouchUpInside];
     [self.mainView addSubview:btn];
 }
-
 - (void)toggleAction:(UIButton *)sender {
     bool state = false;
     if (sender.tag == 1) { g_Aimbot = !g_Aimbot; state = g_Aimbot; }
     if (sender.tag == 2) { g_ESP = !g_ESP; state = g_ESP; }
     if (sender.tag == 3) { g_FOV = !g_FOV; state = g_FOV; }
-    
     NSString *base = sender.tag == 1 ? @"AIMBOT 100%" : (sender.tag == 2 ? @"ESP BOX" : @"FOV CIRCLE");
     [sender setTitle:[NSString stringWithFormat:@"%@ [%@]", base, state ? @"ON" : @"OFF"] forState:UIControlStateNormal];
     sender.backgroundColor = state ? [UIColor greenColor] : [UIColor darkGrayColor];
 }
-
 - (void)showMenu {
     self.mainView.hidden = NO;
     [UIView animateWithDuration:0.2 animations:^{ self.mainView.alpha = 1.0; }];
@@ -141,7 +144,52 @@ static float g_FOVRadius = 120.0f;
 }
 @end
 
+// ==========================================
+// O HOOK DO AIMBOT (BASEADO NO TEU DUMP)
+// ==========================================
+
+// Assinatura da função SetAimRotation do jogo
+static void (*orig_SetAimRotation)(void *instance, Quaternion rotation);
+static void hook_SetAimRotation(void *instance, Quaternion rotation) {
+    
+    if (g_Aimbot) {
+        // FILL: Aqui é onde a mágica do cálculo do inimigo mais próximo vai entrar.
+        // O "instance" é o objeto do jogador. O "rotation" é pra onde a mira tá indo.
+        //
+        // Como ainda não temos o offset da lista de inimigos (CurrentMatch -> PlayerList),
+        // vamos apenas chamar a função original por enquanto.
+        //
+        // Quando tivermos a lista de inimigos, o código vai ficar assim:
+        // 1. Achar o inimigo mais próximo do centro da tela.
+        // 2. Calcular o Quaternion (rotação) até a cabeça dele.
+        // 3. Substituir o "rotation" pelo novo cálculo.
+        
+        // Exemplo de como forçar a mira pra frente (só pra testar se o hook tá funcionando):
+        // rotation.y = 0.707f; // Altera a rotação
+    }
+    
+    orig_SetAimRotation(instance, rotation);
+}
+
 %ctor {
+    // Acha a base do UnityFramework na memória
+    uintptr_t unityBase = 0;
+    for (int i = 0; i < _dyld_image_count(); i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name && strstr(name, "UnityFramework")) {
+            unityBase = _dyld_get_image_vmaddr_slide(i);
+            break;
+        }
+    }
+
+    if (unityBase != 0) {
+        // OFFSET DO SETAIMROTATION (Pego do teu dump da print)
+        uintptr_t setAimRotationAddr = unityBase + 0x11a5820;
+        
+        // Hooka a função
+        MSHookFunction((void *)setAimRotationAddr, (void *)hook_SetAimRotation, (void **)&orig_SetAimRotation);
+    }
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         [[HyzzPanel new] makeKeyAndVisible];
     });
