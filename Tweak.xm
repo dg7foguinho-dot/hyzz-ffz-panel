@@ -2,29 +2,60 @@
 #import <substrate.h>
 #import <mach-o/dyld.h>
 #import <string.h>
+#import <sys/sysctl.h>
+#import <sys/ptrace.h>
 
 static bool g_Aimbot = false;
 static bool g_ESP = false;
 static bool g_FOV = false;
 static float g_FOVRadius = 150.0f;
-
 struct Vector3 { float x, y, z; };
 struct Quaternion { float x, y, z, w; };
 
 // ==========================================
-// STEALTH (BYPASS BÁSICO DE STRINGS)
+// 1. BYPASS EXTREMO (STEALTH)
 // ==========================================
-static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
-static const char* hook_dyld_get_image_name(uint32_t image_index) {
-    const char* name = orig_dyld_get_image_name(image_index);
-    if (name && (strstr(name, "HyzzFFZ") || strstr(name, "substrate") || strstr(name, "ellekit"))) {
-        return "/usr/lib/libSystem.B.dylib";
-    }
+static const char* (*orig_dyld_get_image_name)(uint32_t);
+static const char* hook_dyld_get_image_name(uint32_t index) {
+    const char* name = orig_dyld_get_image_name(index);
+    if (name && (strstr(name, "HyzzFFZ") || strstr(name, "substrate"))) return "/usr/lib/libSystem.B.dylib";
     return name;
 }
 
+static char** (*orig_objc_copyImageNames)(unsigned int*);
+static char** hook_objc_copyImageNames(unsigned int* outCount) {
+    char** images = orig_objc_copyImageNames(outCount);
+    if (images && outCount) {
+        for (unsigned int i = 0; i < *outCount; i++) {
+            if (strstr(images[i], "HyzzFFZ") || strstr(images[i], "substrate")) images[i] = strdup("/usr/lib/libSystem.B.dylib");
+        }
+    }
+    return images;
+}
+
+static int (*orig_ptrace)(int, pid_t, caddr_t, int);
+static int hook_ptrace(int request, pid_t pid, caddr_t addr, int data) {
+    if (request == PT_DENY_ATTACH) return 0;
+    return orig_ptrace(request, pid, addr, data);
+}
+
+static int (*orig_sysctl)(int*, u_int, void*, size_t*, void*, size_t);
+static int hook_sysctl(int* name, u_int namelen, void* oldp, size_t* oldlenp, void* newp, size_t newlen) {
+    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+    if (ret == 0 && oldp && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
+        ((struct kinfo_proc*)oldp)->kp_proc.p_flag &= ~P_TRACED;
+    }
+    return ret;
+}
+
+static char* (*orig_getenv)(const char*);
+static char* hook_getenv(const char* name) {
+    if (strstr(name, "DYLD_INSERT_LIBRARIES") || strstr(name, "DYLD_FRAMEWORK_PATH")) return NULL;
+    return orig_getenv(name);
+}
+
 // ==========================================
-// UI OVERLAYS
+// 2. UI DIRETAMENTE NA JANELA DO JOGO
 // ==========================================
 @interface FOVOverlay : UIView
 @end
@@ -33,7 +64,7 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
     if (!g_FOV) return;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(ctx, [UIColor greenColor].CGColor);
-    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineWidth(ctx, 2.0);
     CGRect circle = CGRectMake(rect.size.width/2 - g_FOVRadius, rect.size.height/2 - g_FOVRadius, g_FOVRadius*2, g_FOVRadius*2);
     CGContextStrokeEllipseInRect(ctx, circle);
 }
@@ -51,34 +82,24 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
 }
 @end
 
-// ==========================================
-// PAINEL
-// ==========================================
-@interface HyzzPanel : UIWindow
+@interface HyzzPanel : UIView
 @property (nonatomic, strong) UIView *mainView;
 @property (nonatomic, strong) UIButton *openMenuBtn;
 @end
 
 @implementation HyzzPanel
-- (instancetype)initWithWindowScene:(UIWindowScene *)windowScene {
-    self = [super initWithWindowScene:windowScene];
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
     if (!self) return nil;
-    self.frame = windowScene.coordinateSpace.bounds;
-    self.windowLevel = UIWindowLevelAlert + 100;
     self.backgroundColor = [UIColor clearColor];
-    
-    // Root controller pra conseguir exibir os overlays
-    UIViewController *rootVC = [UIViewController new];
-    rootVC.view.backgroundColor = [UIColor clearColor];
-    self.rootViewController = rootVC;
-    self.hidden = NO;
-    
+    self.userInteractionEnabled = YES;
+
     FOVOverlay *fov = [[FOVOverlay alloc] initWithFrame:self.bounds];
     fov.userInteractionEnabled = NO; fov.backgroundColor = [UIColor clearColor];
-    [self.rootViewController.view addSubview:fov];
+    [self addSubview:fov];
     ESPOverlay *esp = [[ESPOverlay alloc] initWithFrame:self.bounds];
     esp.userInteractionEnabled = NO; esp.backgroundColor = [UIColor clearColor];
-    [self.rootViewController.view addSubview:esp];
+    [self addSubview:esp];
 
     self.openMenuBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     self.openMenuBtn.frame = CGRectMake(20, 100, 60, 60);
@@ -86,7 +107,7 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
     self.openMenuBtn.layer.cornerRadius = 30;
     [self.openMenuBtn setTitle:@"HYZ" forState:UIControlStateNormal];
     [self.openMenuBtn addTarget:self action:@selector(showMenu) forControlEvents:UIControlEventTouchUpInside];
-    [self.rootViewController.view addSubview:self.openMenuBtn];
+    [self addSubview:self.openMenuBtn];
 
     UIPanGestureRecognizer *panBtn = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(dragBtn:)];
     [self.openMenuBtn addGestureRecognizer:panBtn];
@@ -97,7 +118,7 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
     self.mainView.layer.borderWidth = 2.0;
     self.mainView.layer.borderColor = [UIColor purpleColor].CGColor;
     self.mainView.hidden = YES; self.mainView.alpha = 0.0;
-    [self.rootViewController.view addSubview:self.mainView];
+    [self addSubview:self.mainView];
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 20, 260, 30)];
     title.text = @"hyzz ffz // EXTERNAL";
@@ -145,46 +166,56 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
 @end
 
 // ==========================================
-// HOOK AIMBOT
+// 3. HOOK DO AIMBOT
 // ==========================================
-static void (*orig_SetAimRotation)(void *instance, Quaternion rotation);
-static void hook_SetAimRotation(void *instance, Quaternion rotation) {
+static void (*orig_SetAimRotation)(void*, Quaternion);
+static void hook_SetAimRotation(void* instance, Quaternion rotation) {
     if (g_Aimbot) {
-        // FILL: Lógica do aimbot vai aqui.
+        // FILL: A mira real vai aqui depois.
     }
     orig_SetAimRotation(instance, rotation);
 }
 
 // ==========================================
-// LOOP DE INICIALIZAÇÃO (A MÁGICA PRA APARECER)
+// 4. O LOOP QUE FAZ O PAINEL APARECER
 // ==========================================
-static void tryShowPanel() {
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-            HyzzPanel *panel = [[HyzzPanel alloc] initWithWindowScene:(UIWindowScene *)scene];
-            [panel makeKeyAndVisible];
-            return; // Se achou a cena, cria o painel e para o loop
-        }
+static void attachPanelToWindow() {
+    // Pega a janela principal do app
+    UIWindow *keyWindow = nil;
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        if (window.isKeyWindow) { keyWindow = window; break; }
     }
-    // Se não achou, tenta de novo em 1 segundo
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        tryShowPanel();
-    });
+    
+    if (keyWindow) {
+        // Se a janela já tem o painel, não faz nada
+        if ([keyWindow viewWithTag:9999]) return;
+        
+        // Cria o painel e adiciona direto na raiz da tela
+        HyzzPanel *panel = [[HyzzPanel alloc] initWithFrame:keyWindow.bounds];
+        panel.tag = 9999;
+        [keyWindow addSubview:panel];
+        [keyWindow bringSubviewToFront:panel];
+        NSLog(@"[HyzzFFZ] Painel anexado com sucesso!");
+    } else {
+        // Se ainda não tem janela (jogo carregando), tenta de novo em 1 segundo
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            attachPanelToWindow();
+        });
+    }
 }
 
 %ctor {
     // Ativa o stealth
-    MSHookFunction((void *)&_dyld_get_image_name, (void *)hook_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
-
-    // Começa a tentar mostrar o painel 3 segundos após o início
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        tryShowPanel();
-    });
+    MSHookFunction((void*)&_dyld_get_image_name, (void*)hook_dyld_get_image_name, (void**)&orig_dyld_get_image_name);
+    MSHookFunction((void*)&objc_copyImageNames, (void*)hook_objc_copyImageNames, (void**)&orig_objc_copyImageNames);
+    MSHookFunction((void*)&ptrace, (void*)hook_ptrace, (void**)&orig_ptrace);
+    MSHookFunction((void*)&sysctl, (void*)hook_sysctl, (void**)&orig_sysctl);
+    MSHookFunction((void*)&getenv, (void*)hook_getenv, (void**)&orig_getenv);
 
     // Hook do Aimbot
     uintptr_t unityBase = 0;
     for (int i = 0; i < _dyld_image_count(); i++) {
-        const char *name = _dyld_get_image_name(i);
+        const char* name = _dyld_get_image_name(i);
         if (name && strstr(name, "UnityFramework")) {
             unityBase = _dyld_get_image_vmaddr_slide(i);
             break;
@@ -192,6 +223,11 @@ static void tryShowPanel() {
     }
     if (unityBase != 0) {
         uintptr_t setAimRotationAddr = unityBase + 0x11a5820;
-        MSHookFunction((void *)setAimRotationAddr, (void *)hook_SetAimRotation, (void **)&orig_SetAimRotation);
+        MSHookFunction((void*)setAimRotationAddr, (void*)hook_SetAimRotation, (void**)&orig_SetAimRotation);
     }
+
+    // Começa a tentar colar o painel na tela
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        attachPanelToWindow();
+    });
 }
