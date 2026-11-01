@@ -2,22 +2,15 @@
 #import <substrate.h>
 #import <mach-o/dyld.h>
 #import <string.h>
-#import <sys/sysctl.h>
 #import <objc/runtime.h>
-
-// Correção do linker pra função C no arquivo ObjC++
-#define PT_DENY_ATTACH 31
-extern "C" int ptrace(int _request, int _pid, char* _addr, int _data);
 
 static bool g_Aimbot = false;
 static bool g_ESP = false;
 static bool g_FOV = false;
 static float g_FOVRadius = 150.0f;
-struct Vector3 { float x, y, z; };
-struct Quaternion { float x, y, z, w; };
 
 // ==========================================
-// 1. BYPASS EXTREMO (STEALTH)
+// 1. BYPASS BÁSICO (ESCONDE A DYLIB)
 // ==========================================
 static const char* (*orig_dyld_get_image_name)(uint32_t);
 static const char* hook_dyld_get_image_name(uint32_t index) {
@@ -37,29 +30,8 @@ static char** hook_objc_copyImageNames(unsigned int* outCount) {
     return images;
 }
 
-static int (*orig_ptrace)(int, int, char*, int);
-static int hook_ptrace(int request, int pid, char* addr, int data) {
-    if (request == PT_DENY_ATTACH) return 0;
-    return orig_ptrace(request, pid, addr, data);
-}
-
-static int (*orig_sysctl)(int*, u_int, void*, size_t*, void*, size_t);
-static int hook_sysctl(int* name, u_int namelen, void* oldp, size_t* oldlenp, void* newp, size_t newlen) {
-    int ret = orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
-    if (ret == 0 && oldp && name[0] == CTL_KERN && name[1] == KERN_PROC && name[2] == KERN_PROC_PID) {
-        ((struct kinfo_proc*)oldp)->kp_proc.p_flag &= ~P_TRACED;
-    }
-    return ret;
-}
-
-static char* (*orig_getenv)(const char*);
-static char* hook_getenv(const char* name) {
-    if (strstr(name, "DYLD_INSERT_LIBRARIES") || strstr(name, "DYLD_FRAMEWORK_PATH")) return NULL;
-    return orig_getenv(name);
-}
-
 // ==========================================
-// 2. UI DIRETAMENTE NA JANELA DO JOGO
+// 2. A INTERFACE DO PAINEL
 // ==========================================
 @interface FOVOverlay : UIView
 @end
@@ -170,59 +142,35 @@ static char* hook_getenv(const char* name) {
 @end
 
 // ==========================================
-// 3. HOOK DO AIMBOT
-// ==========================================
-static void (*orig_SetAimRotation)(void*, Quaternion);
-static void hook_SetAimRotation(void* instance, Quaternion rotation) {
-    if (g_Aimbot) {
-        // FILL: A mira real vai aqui depois.
-    }
-    orig_SetAimRotation(instance, rotation);
-}
-
-// ==========================================
-// 4. O LOOP QUE FAZ O PAINEL APARECER
+// 3. INICIALIZAÇÃO DO PAINEL
 // ==========================================
 static void attachPanelToWindow() {
-    UIWindow *keyWindow = nil;
-    for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        if (window.isKeyWindow) { keyWindow = window; break; }
-    }
-    
-    if (keyWindow) {
-        if ([keyWindow viewWithTag:9999]) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *keyWindow = nil;
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            if (window.isKeyWindow) { keyWindow = window; break; }
+        }
         
-        HyzzPanel *panel = [[HyzzPanel alloc] initWithFrame:keyWindow.bounds];
-        panel.tag = 9999;
-        [keyWindow addSubview:panel];
-        [keyWindow bringSubviewToFront:panel];
-    } else {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            attachPanelToWindow();
-        });
-    }
+        if (keyWindow) {
+            if ([keyWindow viewWithTag:9999]) return;
+            HyzzPanel *panel = [[HyzzPanel alloc] initWithFrame:keyWindow.bounds];
+            panel.tag = 9999;
+            [keyWindow addSubview:panel];
+            [keyWindow bringSubviewToFront:panel];
+        } else {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                attachPanelToWindow();
+            });
+        }
+    });
 }
 
 %ctor {
+    // Só ativa o bypass básico
     MSHookFunction((void*)&_dyld_get_image_name, (void*)hook_dyld_get_image_name, (void**)&orig_dyld_get_image_name);
     MSHookFunction((void*)&objc_copyImageNames, (void*)hook_objc_copyImageNames, (void**)&orig_objc_copyImageNames);
-    MSHookFunction((void*)&ptrace, (void*)hook_ptrace, (void**)&orig_ptrace);
-    MSHookFunction((void*)&sysctl, (void*)hook_sysctl, (void**)&orig_sysctl);
-    MSHookFunction((void*)&getenv, (void*)hook_getenv, (void**)&orig_getenv);
 
-    uintptr_t unityBase = 0;
-    for (int i = 0; i < _dyld_image_count(); i++) {
-        const char* name = _dyld_get_image_name(i);
-        if (name && strstr(name, "UnityFramework")) {
-            unityBase = _dyld_get_image_vmaddr_slide(i);
-            break;
-        }
-    }
-    if (unityBase != 0) {
-        uintptr_t setAimRotationAddr = unityBase + 0x11a5820;
-        MSHookFunction((void*)setAimRotationAddr, (void*)hook_SetAimRotation, (void**)&orig_SetAimRotation);
-    }
-
+    // Tenta colar o painel na tela a partir dos 3 segundos
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         attachPanelToWindow();
     });
