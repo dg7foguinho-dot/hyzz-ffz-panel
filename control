@@ -1,0 +1,8 @@
+Package: com.hyzz.ffz
+Name: HyzzFFZ
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: hyzz ffz panel
+Maintainer: hyzz
+Author: hyzz
+Section: Tweaks
