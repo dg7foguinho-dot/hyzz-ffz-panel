@@ -3,7 +3,11 @@
 #import <mach-o/dyld.h>
 #import <string.h>
 #import <sys/sysctl.h>
-#import <sys/ptrace.h>
+#import <objc/runtime.h>
+
+// Fix pro erro do sys/ptrace.h no GitHub Actions
+#define PT_DENY_ATTACH 31
+extern int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
 
 static bool g_Aimbot = false;
 static bool g_ESP = false;
@@ -180,24 +184,19 @@ static void hook_SetAimRotation(void* instance, Quaternion rotation) {
 // 4. O LOOP QUE FAZ O PAINEL APARECER
 // ==========================================
 static void attachPanelToWindow() {
-    // Pega a janela principal do app
     UIWindow *keyWindow = nil;
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
         if (window.isKeyWindow) { keyWindow = window; break; }
     }
     
     if (keyWindow) {
-        // Se a janela já tem o painel, não faz nada
         if ([keyWindow viewWithTag:9999]) return;
         
-        // Cria o painel e adiciona direto na raiz da tela
         HyzzPanel *panel = [[HyzzPanel alloc] initWithFrame:keyWindow.bounds];
         panel.tag = 9999;
         [keyWindow addSubview:panel];
         [keyWindow bringSubviewToFront:panel];
-        NSLog(@"[HyzzFFZ] Painel anexado com sucesso!");
     } else {
-        // Se ainda não tem janela (jogo carregando), tenta de novo em 1 segundo
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             attachPanelToWindow();
         });
@@ -205,14 +204,12 @@ static void attachPanelToWindow() {
 }
 
 %ctor {
-    // Ativa o stealth
     MSHookFunction((void*)&_dyld_get_image_name, (void*)hook_dyld_get_image_name, (void**)&orig_dyld_get_image_name);
     MSHookFunction((void*)&objc_copyImageNames, (void*)hook_objc_copyImageNames, (void**)&orig_objc_copyImageNames);
     MSHookFunction((void*)&ptrace, (void*)hook_ptrace, (void**)&orig_ptrace);
     MSHookFunction((void*)&sysctl, (void*)hook_sysctl, (void**)&orig_sysctl);
     MSHookFunction((void*)&getenv, (void*)hook_getenv, (void**)&orig_getenv);
 
-    // Hook do Aimbot
     uintptr_t unityBase = 0;
     for (int i = 0; i < _dyld_image_count(); i++) {
         const char* name = _dyld_get_image_name(i);
@@ -226,7 +223,6 @@ static void attachPanelToWindow() {
         MSHookFunction((void*)setAimRotationAddr, (void*)hook_SetAimRotation, (void**)&orig_SetAimRotation);
     }
 
-    // Começa a tentar colar o painel na tela
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         attachPanelToWindow();
     });
