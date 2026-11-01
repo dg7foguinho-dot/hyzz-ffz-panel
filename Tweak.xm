@@ -12,19 +12,19 @@ struct Vector3 { float x, y, z; };
 struct Quaternion { float x, y, z, w; };
 
 // ==========================================
-// MODO FURTIVO (STEALTH)
+// STEALTH (BYPASS BÁSICO DE STRINGS)
 // ==========================================
 static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
 static const char* hook_dyld_get_image_name(uint32_t image_index) {
     const char* name = orig_dyld_get_image_name(image_index);
-    if (name && (strstr(name, "HyzzFFZ") || strstr(name, "substrate") || strstr(name, "frida"))) {
-        return "/usr/lib/libSystem.B.dylib"; // Engana o anti-cheat
+    if (name && (strstr(name, "HyzzFFZ") || strstr(name, "substrate") || strstr(name, "ellekit"))) {
+        return "/usr/lib/libSystem.B.dylib";
     }
     return name;
 }
 
 // ==========================================
-// UI
+// UI OVERLAYS
 // ==========================================
 @interface FOVOverlay : UIView
 @end
@@ -33,7 +33,7 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
     if (!g_FOV) return;
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     CGContextSetStrokeColorWithColor(ctx, [UIColor greenColor].CGColor);
-    CGContextSetLineWidth(ctx, 2.0);
+    CGContextSetLineWidth(ctx, 1.5);
     CGRect circle = CGRectMake(rect.size.width/2 - g_FOVRadius, rect.size.height/2 - g_FOVRadius, g_FOVRadius*2, g_FOVRadius*2);
     CGContextStrokeEllipseInRect(ctx, circle);
 }
@@ -51,6 +51,9 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
 }
 @end
 
+// ==========================================
+// PAINEL
+// ==========================================
 @interface HyzzPanel : UIWindow
 @property (nonatomic, strong) UIView *mainView;
 @property (nonatomic, strong) UIButton *openMenuBtn;
@@ -63,7 +66,11 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
     self.frame = windowScene.coordinateSpace.bounds;
     self.windowLevel = UIWindowLevelAlert + 100;
     self.backgroundColor = [UIColor clearColor];
-    self.rootViewController = [UIViewController new];
+    
+    // Root controller pra conseguir exibir os overlays
+    UIViewController *rootVC = [UIViewController new];
+    rootVC.view.backgroundColor = [UIColor clearColor];
+    self.rootViewController = rootVC;
     self.hidden = NO;
     
     FOVOverlay *fov = [[FOVOverlay alloc] initWithFrame:self.bounds];
@@ -138,24 +145,53 @@ static const char* hook_dyld_get_image_name(uint32_t image_index) {
 @end
 
 // ==========================================
-// INICIALIZAÇÃO SEGURA
+// HOOK AIMBOT
 // ==========================================
+static void (*orig_SetAimRotation)(void *instance, Quaternion rotation);
+static void hook_SetAimRotation(void *instance, Quaternion rotation) {
+    if (g_Aimbot) {
+        // FILL: Lógica do aimbot vai aqui.
+    }
+    orig_SetAimRotation(instance, rotation);
+}
+
+// ==========================================
+// LOOP DE INICIALIZAÇÃO (A MÁGICA PRA APARECER)
+// ==========================================
+static void tryShowPanel() {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+            HyzzPanel *panel = [[HyzzPanel alloc] initWithWindowScene:(UIWindowScene *)scene];
+            [panel makeKeyAndVisible];
+            return; // Se achou a cena, cria o painel e para o loop
+        }
+    }
+    // Se não achou, tenta de novo em 1 segundo
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        tryShowPanel();
+    });
+}
+
 %ctor {
-    // Ativa o modo furtivo escondendo o nome da dylib
+    // Ativa o stealth
     MSHookFunction((void *)&_dyld_get_image_name, (void *)hook_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
 
-    // Espera o jogo carregar a cena para colocar o painel
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        UIWindowScene *activeScene = nil;
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-                activeScene = (UIWindowScene *)scene;
-                break;
-            }
-        }
-        if (activeScene) {
-            HyzzPanel *panel = [[HyzzPanel alloc] initWithWindowScene:activeScene];
-            [panel makeKeyAndVisible];
-        }
+    // Começa a tentar mostrar o painel 3 segundos após o início
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        tryShowPanel();
     });
+
+    // Hook do Aimbot
+    uintptr_t unityBase = 0;
+    for (int i = 0; i < _dyld_image_count(); i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name && strstr(name, "UnityFramework")) {
+            unityBase = _dyld_get_image_vmaddr_slide(i);
+            break;
+        }
+    }
+    if (unityBase != 0) {
+        uintptr_t setAimRotationAddr = unityBase + 0x11a5820;
+        MSHookFunction((void *)setAimRotationAddr, (void *)hook_SetAimRotation, (void **)&orig_SetAimRotation);
+    }
 }
