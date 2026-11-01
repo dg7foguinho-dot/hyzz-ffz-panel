@@ -5,9 +5,9 @@
 #import <sys/sysctl.h>
 #import <objc/runtime.h>
 
-// Fix pro erro do sys/ptrace.h no GitHub Actions
+// Correção do linker pra função C no arquivo ObjC++
 #define PT_DENY_ATTACH 31
-extern int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
+extern "C" int ptrace(int _request, int _pid, char* _addr, int _data);
 
 static bool g_Aimbot = false;
 static bool g_ESP = false;
@@ -37,8 +37,8 @@ static char** hook_objc_copyImageNames(unsigned int* outCount) {
     return images;
 }
 
-static int (*orig_ptrace)(int, pid_t, caddr_t, int);
-static int hook_ptrace(int request, pid_t pid, caddr_t addr, int data) {
+static int (*orig_ptrace)(int, int, char*, int);
+static int hook_ptrace(int request, int pid, char* addr, int data) {
     if (request == PT_DENY_ATTACH) return 0;
     return orig_ptrace(request, pid, addr, data);
 }
