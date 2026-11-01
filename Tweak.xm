@@ -1,23 +1,30 @@
 #import <UIKit/UIKit.h>
 #import <substrate.h>
 #import <mach-o/dyld.h>
+#import <string.h>
 
-// ==========================================
-// VARIÁVEIS DO CHEAT
-// ==========================================
 static bool g_Aimbot = false;
 static bool g_ESP = false;
 static bool g_FOV = false;
 static float g_FOVRadius = 150.0f;
 
-// ==========================================
-// ESTRUTURAS DO UNITY (Vector3, Quaternion)
-// ==========================================
 struct Vector3 { float x, y, z; };
 struct Quaternion { float x, y, z, w; };
 
 // ==========================================
-// FOV E ESP (IGUAL AO ANTERIOR)
+// MODO FURTIVO (STEALTH)
+// ==========================================
+static const char* (*orig_dyld_get_image_name)(uint32_t image_index);
+static const char* hook_dyld_get_image_name(uint32_t image_index) {
+    const char* name = orig_dyld_get_image_name(image_index);
+    if (name && (strstr(name, "HyzzFFZ") || strstr(name, "substrate") || strstr(name, "frida"))) {
+        return "/usr/lib/libSystem.B.dylib"; // Engana o anti-cheat
+    }
+    return name;
+}
+
+// ==========================================
+// UI
 // ==========================================
 @interface FOVOverlay : UIView
 @end
@@ -44,23 +51,21 @@ struct Quaternion { float x, y, z, w; };
 }
 @end
 
-// ==========================================
-// PAINEL DO HYZZ
-// ==========================================
 @interface HyzzPanel : UIWindow
 @property (nonatomic, strong) UIView *mainView;
 @property (nonatomic, strong) UIButton *openMenuBtn;
 @end
 
 @implementation HyzzPanel
-- (instancetype)init {
-    self = [super initWithFrame:[UIScreen mainScreen].bounds];
+- (instancetype)initWithWindowScene:(UIWindowScene *)windowScene {
+    self = [super initWithWindowScene:windowScene];
     if (!self) return nil;
+    self.frame = windowScene.coordinateSpace.bounds;
     self.windowLevel = UIWindowLevelAlert + 100;
     self.backgroundColor = [UIColor clearColor];
     self.rootViewController = [UIViewController new];
     self.hidden = NO;
-
+    
     FOVOverlay *fov = [[FOVOverlay alloc] initWithFrame:self.bounds];
     fov.userInteractionEnabled = NO; fov.backgroundColor = [UIColor clearColor];
     [self.rootViewController.view addSubview:fov];
@@ -107,6 +112,7 @@ struct Quaternion { float x, y, z, w; };
     [self.mainView addGestureRecognizer:pan];
     return self;
 }
+
 - (void)addToggle:(NSString *)title y:(CGFloat)y tag:(int)tag {
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     btn.frame = CGRectMake(20, y, 260, 45);
@@ -125,72 +131,31 @@ struct Quaternion { float x, y, z, w; };
     [sender setTitle:[NSString stringWithFormat:@"%@ [%@]", base, state ? @"ON" : @"OFF"] forState:UIControlStateNormal];
     sender.backgroundColor = state ? [UIColor greenColor] : [UIColor darkGrayColor];
 }
-- (void)showMenu {
-    self.mainView.hidden = NO;
-    [UIView animateWithDuration:0.2 animations:^{ self.mainView.alpha = 1.0; }];
-}
-- (void)hideMenu {
-    [UIView animateWithDuration:0.2 animations:^{ self.mainView.alpha = 0.0; } completion:^(BOOL finished) { self.mainView.hidden = YES; }];
-}
-- (void)dragMenu:(UIPanGestureRecognizer *)g {
-    CGPoint p = [g translationInView:self];
-    g.view.center = CGPointMake(g.view.center.x + p.x, g.view.center.y + p.y);
-    [g setTranslation:CGPointZero inView:self];
-}
-- (void)dragBtn:(UIPanGestureRecognizer *)g {
-    CGPoint p = [g translationInView:self];
-    g.view.center = CGPointMake(g.view.center.x + p.x, g.view.center.y + p.y);
-    [g setTranslation:CGPointZero inView:self];
-}
+- (void)showMenu { self.mainView.hidden = NO; [UIView animateWithDuration:0.2 animations:^{ self.mainView.alpha = 1.0; }]; }
+- (void)hideMenu { [UIView animateWithDuration:0.2 animations:^{ self.mainView.alpha = 0.0; } completion:^(BOOL finished) { self.mainView.hidden = YES; }]; }
+- (void)dragMenu:(UIPanGestureRecognizer *)g { CGPoint p = [g translationInView:self]; g.view.center = CGPointMake(g.view.center.x + p.x, g.view.center.y + p.y); [g setTranslation:CGPointZero inView:self]; }
+- (void)dragBtn:(UIPanGestureRecognizer *)g { CGPoint p = [g translationInView:self]; g.view.center = CGPointMake(g.view.center.x + p.x, g.view.center.y + p.y); [g setTranslation:CGPointZero inView:self]; }
 @end
 
 // ==========================================
-// O HOOK DO AIMBOT (BASEADO NO TEU DUMP)
+// INICIALIZAÇÃO SEGURA
 // ==========================================
-
-// Assinatura da função SetAimRotation do jogo
-static void (*orig_SetAimRotation)(void *instance, Quaternion rotation);
-static void hook_SetAimRotation(void *instance, Quaternion rotation) {
-    
-    if (g_Aimbot) {
-        // FILL: Aqui é onde a mágica do cálculo do inimigo mais próximo vai entrar.
-        // O "instance" é o objeto do jogador. O "rotation" é pra onde a mira tá indo.
-        //
-        // Como ainda não temos o offset da lista de inimigos (CurrentMatch -> PlayerList),
-        // vamos apenas chamar a função original por enquanto.
-        //
-        // Quando tivermos a lista de inimigos, o código vai ficar assim:
-        // 1. Achar o inimigo mais próximo do centro da tela.
-        // 2. Calcular o Quaternion (rotação) até a cabeça dele.
-        // 3. Substituir o "rotation" pelo novo cálculo.
-        
-        // Exemplo de como forçar a mira pra frente (só pra testar se o hook tá funcionando):
-        // rotation.y = 0.707f; // Altera a rotação
-    }
-    
-    orig_SetAimRotation(instance, rotation);
-}
-
 %ctor {
-    // Acha a base do UnityFramework na memória
-    uintptr_t unityBase = 0;
-    for (int i = 0; i < _dyld_image_count(); i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, "UnityFramework")) {
-            unityBase = _dyld_get_image_vmaddr_slide(i);
-            break;
+    // Ativa o modo furtivo escondendo o nome da dylib
+    MSHookFunction((void *)&_dyld_get_image_name, (void *)hook_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
+
+    // Espera o jogo carregar a cena para colocar o painel
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        UIWindowScene *activeScene = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
+                activeScene = (UIWindowScene *)scene;
+                break;
+            }
         }
-    }
-
-    if (unityBase != 0) {
-        // OFFSET DO SETAIMROTATION (Pego do teu dump da print)
-        uintptr_t setAimRotationAddr = unityBase + 0x11a5820;
-        
-        // Hooka a função
-        MSHookFunction((void *)setAimRotationAddr, (void *)hook_SetAimRotation, (void **)&orig_SetAimRotation);
-    }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        [[HyzzPanel new] makeKeyAndVisible];
+        if (activeScene) {
+            HyzzPanel *panel = [[HyzzPanel alloc] initWithWindowScene:activeScene];
+            [panel makeKeyAndVisible];
+        }
     });
 }
